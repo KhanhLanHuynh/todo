@@ -12,14 +12,11 @@ Railway sets `PORT` itself. The server already listens on that port.
 
 ## 1. Push this repository to GitHub
 
-Railway deploys from GitHub. If the repo is not there yet:
+Railway deploys from GitHub. This project is already at [github.com/KhanhLanHuynh/todo](https://github.com/KhanhLanHuynh/todo). After later changes:
 
 ```bash
-git remote add origin https://github.com/<your-user>/daily-task-tracker.git
-git push -u origin main
+git push origin main
 ```
-
-Use the real repository URL from GitHub.
 
 ## 2. Create a Railway project from the repo
 
