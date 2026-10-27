@@ -39,6 +39,8 @@ CREATE INDEX IF NOT EXISTS flows_user_idx ON flows (user_id);
 
 ALTER TABLE flows ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
+ALTER TABLE flows ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('high', 'medium', 'low'));
+
 CREATE TABLE IF NOT EXISTS flow_occurrences (
   flow_id UUID NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
   task_date DATE NOT NULL,
@@ -87,6 +89,7 @@ function flowJson(row) {
   return {
     id: row.id,
     title: row.title,
+    priority: row.priority,
     category: row.category,
     schedule: row.schedule,
     enabled: row.enabled

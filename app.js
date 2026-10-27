@@ -1,11 +1,11 @@
 "use strict";
 
 const ICONS = {
-  grip: `<svg width="14" height="18" viewBox="0 0 14 18" aria-hidden="true"><circle cx="4" cy="3.5" r="1.25" fill="currentColor"/><circle cx="10" cy="3.5" r="1.25" fill="currentColor"/><circle cx="4" cy="9" r="1.25" fill="currentColor"/><circle cx="10" cy="9" r="1.25" fill="currentColor"/><circle cx="4" cy="14.5" r="1.25" fill="currentColor"/><circle cx="10" cy="14.5" r="1.25" fill="currentColor"/></svg>`,
   check: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12.5 9.2 17 19 7" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   dots: `<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/></svg>`,
   clock: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.8"/><path d="M12 8v4.5l2.5 1.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
   zap: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
+  edit: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m13.5 6.5 3 3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`,
   trash: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M8 7l1 13h6l1-13" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`
 };
 
@@ -20,8 +20,7 @@ const state = {
   priorities: [],
   categories: [],
   menuTaskId: null,
-  renamingId: null,
-  dragId: null
+  renamingId: null
 };
 
 let loadToken = 0;
@@ -29,6 +28,7 @@ let loadToken = 0;
 let undoFn = null;
 let toastTimer = null;
 let cancelRename = false;
+let returnToMaster = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -183,6 +183,25 @@ function minutesOf(label) {
   return hours * 60 + mins;
 }
 
+const PRIORITY_RANK = { high: 0, medium: 1, low: 2 };
+
+function compareByPriorityThenTime(a, b, timeOfItem) {
+  const byPriority = (PRIORITY_RANK[a.priority] ?? 3) - (PRIORITY_RANK[b.priority] ?? 3);
+  if (byPriority) return byPriority;
+  const aMinutes = minutesOf(timeOfItem(a));
+  const bMinutes = minutesOf(timeOfItem(b));
+  if (aMinutes === null || bMinutes === null) {
+    if (aMinutes === bMinutes) return String(a.title).localeCompare(String(b.title));
+    return aMinutes === null ? 1 : -1;
+  }
+  if (aMinutes !== bMinutes) return aMinutes - bMinutes;
+  return String(a.title).localeCompare(String(b.title));
+}
+
+function sortedFlows() {
+  return state.flows.slice().sort((a, b) => compareByPriorityThenTime(a, b, (flow) => flow.schedule));
+}
+
 function formatNow() {
   const now = new Date();
   let hours = now.getHours();
@@ -201,6 +220,31 @@ function formatTimeValue(value) {
   return `${hours}:${minuteText || "00"} ${ap}`;
 }
 
+const REPEAT_OPTIONS = ["Daily", "Weekdays", "Weekly", "Bi-weekly", "Monthly"];
+const CATEGORY_OPTIONS = ["Work", "Personal", "Health"];
+const PRIORITY_OPTIONS = [["high", "High"], ["medium", "Medium"], ["low", "Low"]];
+
+function flowPriority(flow) {
+  return Object.prototype.hasOwnProperty.call(PRIORITY_RANK, flow?.priority) ? flow.priority : "medium";
+}
+
+function timeInputValue(label) {
+  const mins = minutesOf(label);
+  if (mins === null) return "08:00";
+  return `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+}
+
+function parseSchedule(schedule) {
+  const repeatPart = String(schedule || "").split("•")[0].trim();
+  const repeats = REPEAT_OPTIONS.find((item) => item.toLowerCase() === repeatPart.toLowerCase()) || "Daily";
+  return { repeats, timeValue: timeInputValue(schedule) };
+}
+
+function flowBadge(flow) {
+  const priority = flowPriority(flow);
+  return `<span class="badge ${escapeHtml(priority)}">${escapeHtml(priority)}</span>`;
+}
+
 function visibleTasks() {
   const query = state.search.trim().toLowerCase();
   return state.tasks.filter((task) => {
@@ -210,7 +254,7 @@ function visibleTasks() {
     if (state.priorities.length && !state.priorities.includes(task.priority)) return false;
     if (state.categories.length && !state.categories.includes(task.category)) return false;
     return true;
-  });
+  }).sort((a, b) => compareByPriorityThenTime(a, b, (task) => task.time));
 }
 
 function progressCopy(done) {
@@ -277,7 +321,6 @@ function renderTasks() {
       : `<span class="task-title${task.completed ? " done" : ""}">${escapeHtml(task.title)}</span>`;
     return `
       <li class="task${task.completed ? " done" : ""}" data-id="${escapeHtml(task.id)}">
-        <span class="grip" draggable="true" title="Drag to reorder" aria-label="Drag to reorder">${ICONS.grip}</span>
         <button type="button" class="check" aria-pressed="${task.completed}" aria-label="${task.completed ? "Mark remaining" : "Mark complete"}">${task.completed ? ICONS.check : ""}</button>
         <div class="task-main">
           <div class="task-title-row">
@@ -306,16 +349,18 @@ function renderTasks() {
 
 function renderFlows() {
   const list = $("flow-list");
-  if (!state.flows.length) {
+  const flows = sortedFlows();
+  if (!flows.length) {
     list.innerHTML = `<li class="empty">No recurring flows yet.</li>`;
     return;
   }
-  list.innerHTML = state.flows.map((flow) => `
+  list.innerHTML = flows.map((flow) => `
     <li class="flow">
       <span class="flow-icon">${ICONS.zap}</span>
       <div>
         <div class="flow-title">
           ${escapeHtml(flow.title)}
+          ${flowBadge(flow)}
           <span class="chip ${escapeHtml(flow.category.toLowerCase())}">${escapeHtml(flow.category)}</span>
         </div>
         <div class="flow-schedule">${ICONS.clock} ${escapeHtml(flow.schedule)}</div>
@@ -324,7 +369,10 @@ function renderFlows() {
         <span>Auto-gen</span>
         <button type="button" class="switch${flow.enabled ? " on" : ""}" data-flow-toggle="${escapeHtml(flow.id)}" aria-pressed="${flow.enabled}" aria-label="Auto-generate ${escapeHtml(flow.title)}"></button>
       </div>
-      <button type="button" class="trash" data-flow-delete="${escapeHtml(flow.id)}" aria-label="Remove ${escapeHtml(flow.title)}">${ICONS.trash}</button>
+      <div class="flow-actions">
+        <button type="button" class="edit" data-flow-edit="${escapeHtml(flow.id)}" aria-label="Edit ${escapeHtml(flow.title)}">${ICONS.edit}</button>
+        <button type="button" class="trash" data-flow-delete="${escapeHtml(flow.id)}" aria-label="Remove ${escapeHtml(flow.title)}">${ICONS.trash}</button>
+      </div>
     </li>
   `).join("");
 }
@@ -483,25 +531,6 @@ function positionMenu(id) {
   if (rect.bottom > window.innerHeight - 12) menu.classList.add("up");
 }
 
-function reorder(fromId, toId) {
-  if (!fromId || !toId || fromId === toId) return;
-  const from = state.tasks.findIndex((task) => task.id === fromId);
-  const to = state.tasks.findIndex((task) => task.id === toId);
-  if (from < 0 || to < 0) return;
-  const previous = state.tasks.slice();
-  const [item] = state.tasks.splice(from, 1);
-  state.tasks.splice(to, 0, item);
-  renderTasks();
-  api("/api/tasks/reorder", {
-    method: "POST",
-    body: { date: state.selectedDate, ids: state.tasks.map((task) => task.id) }
-  }).catch((error) => {
-    state.tasks = previous;
-    renderTasks();
-    toast(error.message);
-  });
-}
-
 async function toggleFlow(id) {
   const flow = state.flows.find((item) => item.id === id);
   if (!flow) return;
@@ -544,6 +573,7 @@ async function deleteFlow(id) {
         method: "POST",
         body: {
           title: removed.title,
+          priority: removed.priority,
           category: removed.category,
           schedule: removed.schedule,
           enabled: removed.enabled
@@ -597,47 +627,68 @@ function openModal(title, bodyHtml) {
   (field || $("modal-close")).focus();
 }
 
-function openCreateFlow() {
-  openModal("Create recurring flow", `
-    <form id="flow-form" class="form">
+function selectOptions(options, selected) {
+  return options.map(([value, label]) => {
+    const text = label || value;
+    return `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(text)}</option>`;
+  }).join("");
+}
+
+function openFlowForm(flow, options = {}) {
+  returnToMaster = Boolean(options.returnToMaster);
+  const editing = Boolean(flow);
+  const parsed = parseSchedule(flow && flow.schedule);
+  const category = CATEGORY_OPTIONS.includes(flow && flow.category) ? flow.category : "Work";
+  const priority = flowPriority(flow);
+  openModal(editing ? "Edit recurring flow" : "Create recurring flow", `
+    <form id="flow-form" class="form"${editing ? ` data-id="${escapeHtml(flow.id)}"` : ""}>
       <label>Name
-        <input name="title" required maxlength="80" placeholder="e.g. Evening shutdown">
+        <input name="title" required maxlength="80" placeholder="e.g. Evening shutdown" value="${escapeHtml(editing ? flow.title : "")}">
       </label>
-      <label>Category
-        <select name="category">
-          <option>Work</option>
-          <option>Personal</option>
-          <option>Health</option>
-        </select>
-      </label>
+      <div class="form-row">
+        <label>Category
+          <select name="category">
+            ${selectOptions(CATEGORY_OPTIONS.map((value) => [value]), category)}
+          </select>
+        </label>
+        <label>Priority
+          <select name="priority">
+            ${selectOptions(PRIORITY_OPTIONS, priority)}
+          </select>
+        </label>
+      </div>
       <div class="form-row">
         <label>Repeats
           <select name="repeats">
-            <option>Daily</option>
-            <option>Weekdays</option>
-            <option>Weekly</option>
-            <option>Bi-weekly</option>
-            <option>Monthly</option>
+            ${selectOptions(REPEAT_OPTIONS.map((value) => [value]), parsed.repeats)}
           </select>
         </label>
         <label>Time
-          <input type="time" name="time" value="08:00">
+          <input type="time" name="time" value="${escapeHtml(parsed.timeValue)}">
         </label>
       </div>
-      <button class="btn-primary" type="submit">Save flow</button>
+      <button class="btn-primary" type="submit">${editing ? "Save changes" : "Save flow"}</button>
     </form>
   `);
 }
 
+function openCreateFlow() {
+  openFlowForm();
+}
+
 function openMaster() {
-  const rows = state.flows.length
-    ? state.flows.map((flow) => `
+  const flows = sortedFlows();
+  const rows = flows.length
+    ? flows.map((flow) => `
         <div class="master-row">
           <div>
             <strong>${escapeHtml(flow.title)}</strong>
-            <div class="task-meta">${escapeHtml(flow.category)} · ${escapeHtml(flow.schedule)}</div>
+            <div class="task-meta">${flowBadge(flow)}${escapeHtml(flow.category)} · ${escapeHtml(flow.schedule)}</div>
           </div>
-          <button type="button" class="switch${flow.enabled ? " on" : ""}" data-flow-toggle="${escapeHtml(flow.id)}" aria-pressed="${flow.enabled}" aria-label="Auto-generate ${escapeHtml(flow.title)}"></button>
+          <div class="flow-actions">
+            <button type="button" class="edit" data-flow-edit="${escapeHtml(flow.id)}" aria-label="Edit ${escapeHtml(flow.title)}">${ICONS.edit}</button>
+            <button type="button" class="switch${flow.enabled ? " on" : ""}" data-flow-toggle="${escapeHtml(flow.id)}" aria-pressed="${flow.enabled}" aria-label="Auto-generate ${escapeHtml(flow.title)}"></button>
+          </div>
         </div>
       `).join("")
     : `<p class="empty-note">No recurring flows yet.</p>`;
@@ -773,7 +824,7 @@ function bind() {
         method: "POST",
         body: {
           title,
-          priority: "medium",
+          priority: $("new-priority").value,
           category: "Work",
           time: formatNow(),
           taskDate
@@ -790,6 +841,33 @@ function bind() {
     } catch (error) {
       input.value = title;
       toast(error.message);
+    }
+  });
+
+  $("copy-yesterday").addEventListener("click", async () => {
+    const button = $("copy-yesterday");
+    const today = todayIso();
+    const yesterday = shiftDate(today, -1);
+    button.disabled = true;
+    try {
+      const result = await api("/api/tasks/copy-remaining", {
+        method: "POST",
+        body: { from: yesterday, to: today }
+      });
+      const copied = result.tasks || [];
+      if (state.selectedDate === today && copied.length) {
+        state.tasks.push(...copied);
+        if (state.filter === "completed") state.filter = "all";
+        refresh();
+        setFilter(state.filter);
+      }
+      if (!copied.length && !result.skipped) toast("No remaining tasks from yesterday");
+      else if (!copied.length) toast("Those tasks are already on today");
+      else toast(copied.length === 1 ? "Copied 1 task from yesterday" : `Copied ${copied.length} tasks from yesterday`);
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      button.disabled = false;
     }
   });
 
@@ -845,49 +923,26 @@ function bind() {
     }
   });
 
-  list.addEventListener("dragstart", (event) => {
-    const grip = event.target.closest(".grip");
-    if (!grip) return;
-    const row = grip.closest(".task");
-    state.dragId = row.dataset.id;
-    row.classList.add("dragging");
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", state.dragId);
-  });
-
-  list.addEventListener("dragover", (event) => {
-    const row = event.target.closest(".task");
-    if (!row || !state.dragId) return;
-    event.preventDefault();
-    list.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
-    if (row.dataset.id !== state.dragId) row.classList.add("drag-over");
-  });
-
-  list.addEventListener("drop", (event) => {
-    const row = event.target.closest(".task");
-    if (!row || !state.dragId) return;
-    event.preventDefault();
-    reorder(state.dragId, row.dataset.id);
-    state.dragId = null;
-  });
-
-  list.addEventListener("dragend", () => {
-    state.dragId = null;
-    list.querySelectorAll(".dragging, .drag-over").forEach((el) => {
-      el.classList.remove("dragging", "drag-over");
-    });
-  });
-
   $("flow-list").addEventListener("click", (event) => {
     const toggle = event.target.closest("[data-flow-toggle]");
     const remove = event.target.closest("[data-flow-delete]");
+    const edit = event.target.closest("[data-flow-edit]");
     if (toggle) toggleFlow(toggle.dataset.flowToggle);
     if (remove) deleteFlow(remove.dataset.flowDelete);
+    if (edit) {
+      const flow = state.flows.find((item) => item.id === edit.dataset.flowEdit);
+      if (flow) openFlowForm(flow);
+    }
   });
 
   $("modal-body").addEventListener("click", (event) => {
     const toggle = event.target.closest("[data-flow-toggle]");
+    const edit = event.target.closest("[data-flow-edit]");
     if (toggle) toggleFlow(toggle.dataset.flowToggle);
+    if (edit) {
+      const flow = state.flows.find((item) => item.id === edit.dataset.flowEdit);
+      if (flow) openFlowForm(flow, { returnToMaster: true });
+    }
   });
 
   $("modal-body").addEventListener("submit", async (event) => {
@@ -898,15 +953,32 @@ function bind() {
     if (!title) return;
     const schedule = `${data.get("repeats")} • ${formatTimeValue(data.get("time"))}`;
     const category = String(data.get("category") || "Work");
+    const priority = String(data.get("priority") || "medium");
+    const id = event.target.dataset.id;
     try {
-      const flow = await api("/api/flows", {
-        method: "POST",
-        body: { title, category, schedule, enabled: true }
-      });
-      state.flows.push(flow);
-      renderFlows();
-      closeModal();
-      toast("Recurring flow created. It will show on the next matching day.");
+      if (id) {
+        const saved = await api(`/api/flows/${id}`, {
+          method: "PATCH",
+          body: { title, priority, category, schedule }
+        });
+        const flow = state.flows.find((item) => item.id === id);
+        if (flow) Object.assign(flow, saved);
+        renderFlows();
+        const backToMaster = returnToMaster;
+        returnToMaster = false;
+        closeModal();
+        if (backToMaster) openMaster();
+        toast("Recurring flow updated");
+      } else {
+        const flow = await api("/api/flows", {
+          method: "POST",
+          body: { title, priority, category, schedule, enabled: true }
+        });
+        state.flows.push(flow);
+        renderFlows();
+        closeModal();
+        toast("Recurring flow created. It will show on the next matching day.");
+      }
     } catch (error) {
       toast(error.message);
     }

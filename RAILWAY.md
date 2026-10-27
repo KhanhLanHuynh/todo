@@ -41,7 +41,7 @@ Open the **web service** (the one built from GitHub), then **Variables**. Add:
 | Variable | Value |
 | --- | --- |
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` |
-| `SESSION_SECRET` | A long random string, at least 32 characters |
+| `SESSION_SECRET` | A long random string, at least 32 characters (j8#9Xq2!mP$7vL*w5R&t3N%y6B@h4Kp2W9z8Q) |
 | `NODE_ENV` | `production` |
 | `PGSSLMODE` | `disable` |
 

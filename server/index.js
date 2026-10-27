@@ -119,6 +119,63 @@ function createApp(pool) {
     res.json(result.rows.map(taskJson));
   }));
 
+  app.post("/api/tasks/copy-remaining", requireUser, asyncRoute(async (req, res) => {
+    const from = req.body?.from;
+    const to = req.body?.to;
+    if (!validDate(from) || !validDate(to)) {
+      res.status(400).json({ error: "Choose a valid day." });
+      return;
+    }
+    if (from === to) {
+      res.status(400).json({ error: "Choose two different days." });
+      return;
+    }
+    await generateDueFlows(pool, req.userId, to);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const source = await client.query(
+        `SELECT COUNT(*)::int AS total
+         FROM tasks
+         WHERE user_id = $1 AND task_date = $2 AND completed = false`,
+        [req.userId, from]
+      );
+      const inserted = await client.query(
+        `INSERT INTO tasks (user_id, task_date, title, priority, category, time_label, completed, sort_order)
+         SELECT $1, $2, src.title, src.priority, src.category, src.time_label, false,
+                base.next_order + ROW_NUMBER() OVER (ORDER BY src.sort_order ASC, src.title ASC) - 1
+         FROM tasks src
+         CROSS JOIN (
+           SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order
+           FROM tasks
+           WHERE user_id = $1 AND task_date = $2
+         ) base
+         WHERE src.user_id = $1
+           AND src.task_date = $3
+           AND src.completed = false
+           AND NOT EXISTS (
+             SELECT 1 FROM tasks existing
+             WHERE existing.user_id = $1
+               AND existing.task_date = $2
+               AND existing.completed = false
+               AND existing.title = src.title
+           )
+         RETURNING id, title, priority, category, time_label, completed, task_date, sort_order`,
+        [req.userId, to, from]
+      );
+      await client.query("COMMIT");
+      res.json({
+        tasks: inserted.rows.map(taskJson),
+        skipped: source.rows[0].total - inserted.rows.length
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }));
+
   app.post("/api/tasks", requireUser, asyncRoute(async (req, res) => {
     const title = cleanText(req.body?.title, 120);
     const priority = PRIORITIES.has(req.body?.priority) ? req.body.priority : "medium";
@@ -275,7 +332,7 @@ function createApp(pool) {
 
   app.get("/api/flows", requireUser, asyncRoute(async (req, res) => {
     const result = await pool.query(
-      `SELECT id, title, category, schedule, enabled
+      `SELECT id, title, priority, category, schedule, enabled
        FROM flows WHERE user_id = $1 ORDER BY title ASC`,
       [req.userId]
     );
@@ -284,6 +341,7 @@ function createApp(pool) {
 
   app.post("/api/flows", requireUser, asyncRoute(async (req, res) => {
     const title = cleanText(req.body?.title, 80);
+    const priority = PRIORITIES.has(req.body?.priority) ? req.body.priority : "medium";
     const category = CATEGORIES.has(req.body?.category) ? req.body.category : "Work";
     const schedule = cleanText(req.body?.schedule, 80);
     const enabled = req.body?.enabled === undefined ? true : Boolean(req.body.enabled);
@@ -292,10 +350,10 @@ function createApp(pool) {
       return;
     }
     const result = await pool.query(
-      `INSERT INTO flows (user_id, title, category, schedule, enabled)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, title, category, schedule, enabled`,
-      [req.userId, title, category, schedule, enabled]
+      `INSERT INTO flows (user_id, title, priority, category, schedule, enabled)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, title, priority, category, schedule, enabled`,
+      [req.userId, title, priority, category, schedule, enabled]
     );
     res.status(201).json(flowJson(result.rows[0]));
   }));
@@ -305,14 +363,53 @@ function createApp(pool) {
       res.status(400).json({ error: "Unknown flow." });
       return;
     }
-    if (req.body?.enabled === undefined) {
+    const fields = [];
+    const values = [];
+    const set = (column, value) => {
+      values.push(value);
+      fields.push(`${column} = $${values.length}`);
+    };
+    if (req.body?.title !== undefined) {
+      const title = cleanText(req.body.title, 80);
+      if (!title) {
+        res.status(400).json({ error: "A flow needs a name." });
+        return;
+      }
+      set("title", title);
+    }
+    if (req.body?.priority !== undefined) {
+      if (!PRIORITIES.has(req.body.priority)) {
+        res.status(400).json({ error: "Unknown priority." });
+        return;
+      }
+      set("priority", req.body.priority);
+    }
+    if (req.body?.category !== undefined) {
+      if (!CATEGORIES.has(req.body.category)) {
+        res.status(400).json({ error: "Unknown category." });
+        return;
+      }
+      set("category", req.body.category);
+    }
+    if (req.body?.schedule !== undefined) {
+      const schedule = cleanText(req.body.schedule, 80);
+      if (!schedule) {
+        res.status(400).json({ error: "A flow needs a schedule." });
+        return;
+      }
+      set("schedule", schedule);
+    }
+    if (req.body?.enabled !== undefined) set("enabled", Boolean(req.body.enabled));
+    if (!fields.length) {
       res.status(400).json({ error: "Nothing to update." });
       return;
     }
+    values.push(req.params.id, req.userId);
     const result = await pool.query(
-      `UPDATE flows SET enabled = $1 WHERE id = $2 AND user_id = $3
-       RETURNING id, title, category, schedule, enabled`,
-      [Boolean(req.body.enabled), req.params.id, req.userId]
+      `UPDATE flows SET ${fields.join(", ")}
+       WHERE id = $${values.length - 1} AND user_id = $${values.length}
+       RETURNING id, title, priority, category, schedule, enabled`,
+      values
     );
     if (!result.rows[0]) {
       res.status(404).json({ error: "Flow not found." });
@@ -328,7 +425,7 @@ function createApp(pool) {
     }
     const result = await pool.query(
       `DELETE FROM flows WHERE id = $1 AND user_id = $2
-       RETURNING id, title, category, schedule, enabled`,
+       RETURNING id, title, priority, category, schedule, enabled`,
       [req.params.id, req.userId]
     );
     if (!result.rows[0]) {

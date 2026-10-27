@@ -14,7 +14,7 @@ async function generateDueFlows(pool, userId, date) {
   if (date < today) return;
 
   const flows = await pool.query(
-    `SELECT id, title, category, schedule,
+    `SELECT id, title, priority, category, schedule,
             (created_at AT TIME ZONE 'UTC')::date AS created_date
      FROM flows
      WHERE user_id = $1 AND enabled = true`,
@@ -41,8 +41,8 @@ async function generateDueFlows(pool, userId, date) {
       );
       await client.query(
         `INSERT INTO tasks (user_id, task_date, title, priority, category, time_label, completed, sort_order)
-         VALUES ($1, $2, $3, 'medium', $4, $5, false, $6)`,
-        [userId, date, flow.title, flow.category, timeOf(flow.schedule), order.rows[0].next_order]
+         VALUES ($1, $2, $3, $4, $5, $6, false, $7)`,
+        [userId, date, flow.title, flow.priority, flow.category, timeOf(flow.schedule), order.rows[0].next_order]
       );
     }
     await client.query("COMMIT");
