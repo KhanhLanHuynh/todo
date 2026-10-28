@@ -300,6 +300,10 @@ function taskMenu(task) {
         ${categoryButton("Personal")}
         ${categoryButton("Health")}
       </div>
+      <div class="menu-label">Time</div>
+      <label class="menu-time">
+        <input type="time" data-action="time" value="${escapeHtml(timeInputValue(task.time))}" aria-label="Task time">
+      </label>
       <button type="button" data-action="rename">Rename</button>
       <button type="button" data-action="delete" class="danger">Delete</button>
     </div>
@@ -486,6 +490,15 @@ async function deleteTask(id) {
       toast(error.message);
     }
   });
+}
+
+async function saveTaskTime(id, time) {
+  const task = state.tasks.find((item) => item.id === id);
+  if (!task || task.time === time) return;
+  await patchTask(id, { time });
+  if (!state.tasks.some((item) => item.id === id && item.time === time)) return;
+  if (!$("notif-pop").hidden) renderNotifs();
+  toast("Time updated");
 }
 
 async function saveRename(id, value) {
@@ -806,6 +819,8 @@ function bind() {
     renderTasks();
   });
 
+  $("new-time").value = timeInputValue(formatNow());
+
   $("add-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const input = $("new-task");
@@ -818,6 +833,7 @@ function bind() {
       return;
     }
     const taskDate = state.selectedDate;
+    const time = formatTimeValue($("new-time").value);
     input.value = "";
     try {
       const task = await api("/api/tasks", {
@@ -826,7 +842,7 @@ function bind() {
           title,
           priority: $("new-priority").value,
           category: "Work",
-          time: formatNow(),
+          time,
           taskDate
         }
       });
@@ -894,6 +910,18 @@ function bind() {
       event.stopPropagation();
       handleAction(id, action);
     }
+  });
+
+  list.addEventListener("mousedown", (event) => {
+    if (event.target.closest("[data-action='time']")) event.stopPropagation();
+  });
+
+  list.addEventListener("change", (event) => {
+    const input = event.target.closest("[data-action='time']");
+    if (!input) return;
+    const row = input.closest(".task");
+    if (!row) return;
+    saveTaskTime(row.dataset.id, formatTimeValue(input.value));
   });
 
   list.addEventListener("focusout", (event) => {
