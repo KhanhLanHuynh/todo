@@ -11,6 +11,8 @@ const ROOT = path.join(__dirname, "..");
 const PRIORITIES = new Set(["high", "medium", "low"]);
 const CATEGORIES = new Set(["Work", "Personal", "Health"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const TASK_COLUMNS = "id, title, priority, category, time_label, completed, task_date, sort_order, duration_minutes, started_at";
+const ELAPSED_MINUTES = "GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - started_at)) / 60))::int";
 
 const DUMMY_HASH = bcrypt.hashSync("not-a-real-password", 10);
 
@@ -110,7 +112,7 @@ function createApp(pool) {
     }
     await generateDueFlows(pool, req.userId, date);
     const result = await pool.query(
-      `SELECT id, title, priority, category, time_label, completed, task_date, sort_order
+      `SELECT ${TASK_COLUMNS}
        FROM tasks
        WHERE user_id = $1 AND task_date = $2
        ORDER BY sort_order ASC, title ASC`,
@@ -160,7 +162,7 @@ function createApp(pool) {
                AND existing.completed = false
                AND existing.title = src.title
            )
-         RETURNING id, title, priority, category, time_label, completed, task_date, sort_order`,
+         RETURNING ${TASK_COLUMNS}`,
         [req.userId, to, from]
       );
       await client.query("COMMIT");
@@ -187,6 +189,12 @@ function createApp(pool) {
       res.status(400).json({ error: "A task needs a title and a day." });
       return;
     }
+    const requestedDuration = Number(req.body?.durationMinutes);
+    const durationMinutes = req.body?.durationMinutes === undefined ? 0 : requestedDuration;
+    if (!Number.isInteger(durationMinutes) || durationMinutes < 0 || durationMinutes > 1000000) {
+      res.status(400).json({ error: "Duration is invalid." });
+      return;
+    }
     const orderResult = await pool.query(
       "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM tasks WHERE user_id = $1 AND task_date = $2",
       [req.userId, taskDate]
@@ -194,12 +202,82 @@ function createApp(pool) {
     const requestedOrder = Number(req.body?.sortOrder);
     const sortOrder = Number.isInteger(requestedOrder) ? requestedOrder : orderResult.rows[0].next_order;
     const result = await pool.query(
-      `INSERT INTO tasks (user_id, task_date, title, priority, category, time_label, completed, sort_order)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, title, priority, category, time_label, completed, task_date, sort_order`,
-      [req.userId, taskDate, title, priority, category, time, completed, sortOrder]
+      `INSERT INTO tasks (user_id, task_date, title, priority, category, time_label, completed, sort_order, duration_minutes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING ${TASK_COLUMNS}`,
+      [req.userId, taskDate, title, priority, category, time, completed, sortOrder, durationMinutes]
     );
     res.status(201).json(taskJson(result.rows[0]));
+  }));
+
+  app.post("/api/tasks/:id/timer", requireUser, asyncRoute(async (req, res) => {
+    if (!UUID.test(req.params.id)) {
+      res.status(400).json({ error: "Unknown task." });
+      return;
+    }
+    const action = req.body?.action;
+    if (action !== "start" && action !== "stop") {
+      res.status(400).json({ error: "Choose start or stop." });
+      return;
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1::text)::bigint)", [req.userId]);
+      const existing = await client.query(
+        "SELECT id FROM tasks WHERE id = $1 AND user_id = $2",
+        [req.params.id, req.userId]
+      );
+      if (!existing.rows[0]) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "Task not found." });
+        return;
+      }
+      const changed = [];
+      if (action === "stop") {
+        const stopped = await client.query(
+          `UPDATE tasks
+           SET duration_minutes = duration_minutes + ${ELAPSED_MINUTES},
+               started_at = NULL
+           WHERE id = $1 AND user_id = $2 AND started_at IS NOT NULL
+           RETURNING ${TASK_COLUMNS}`,
+          [req.params.id, req.userId]
+        );
+        changed.push(...stopped.rows);
+      } else {
+        const others = await client.query(
+          `UPDATE tasks
+           SET duration_minutes = duration_minutes + ${ELAPSED_MINUTES},
+               started_at = NULL
+           WHERE user_id = $1 AND started_at IS NOT NULL AND id <> $2
+           RETURNING ${TASK_COLUMNS}`,
+          [req.userId, req.params.id]
+        );
+        changed.push(...others.rows);
+        const started = await client.query(
+          `UPDATE tasks
+           SET started_at = now()
+           WHERE id = $1 AND user_id = $2 AND started_at IS NULL
+           RETURNING ${TASK_COLUMNS}`,
+          [req.params.id, req.userId]
+        );
+        changed.push(...started.rows);
+      }
+      if (!changed.some((row) => String(row.id).toLowerCase() === req.params.id.toLowerCase())) {
+        const current = await client.query(
+          `SELECT ${TASK_COLUMNS} FROM tasks WHERE id = $1 AND user_id = $2`,
+          [req.params.id, req.userId]
+        );
+        changed.push(current.rows[0]);
+      }
+      await client.query("COMMIT");
+      res.json({ tasks: changed.map(taskJson) });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }));
 
   app.patch("/api/tasks/:id", requireUser, asyncRoute(async (req, res) => {
@@ -243,7 +321,14 @@ function createApp(pool) {
       }
       set("time_label", time);
     }
-    if (req.body?.completed !== undefined) set("completed", Boolean(req.body.completed));
+    if (req.body?.completed !== undefined) {
+      const completed = Boolean(req.body.completed);
+      set("completed", completed);
+      if (completed) {
+        fields.push(`duration_minutes = duration_minutes + CASE WHEN started_at IS NOT NULL THEN ${ELAPSED_MINUTES} ELSE 0 END`);
+        fields.push("started_at = NULL");
+      }
+    }
     if (!fields.length) {
       res.status(400).json({ error: "Nothing to update." });
       return;
@@ -252,7 +337,7 @@ function createApp(pool) {
     const result = await pool.query(
       `UPDATE tasks SET ${fields.join(", ")}
        WHERE id = $${values.length - 1} AND user_id = $${values.length}
-       RETURNING id, title, priority, category, time_label, completed, task_date, sort_order`,
+       RETURNING ${TASK_COLUMNS}`,
       values
     );
     if (!result.rows[0]) {
@@ -269,7 +354,7 @@ function createApp(pool) {
     }
     const result = await pool.query(
       `DELETE FROM tasks WHERE id = $1 AND user_id = $2
-       RETURNING id, title, priority, category, time_label, completed, task_date, sort_order`,
+       RETURNING ${TASK_COLUMNS}`,
       [req.params.id, req.userId]
     );
     if (!result.rows[0]) {
@@ -287,7 +372,7 @@ function createApp(pool) {
     }
     const result = await pool.query(
       `DELETE FROM tasks WHERE user_id = $1 AND task_date = $2 AND completed = true
-       RETURNING id, title, priority, category, time_label, completed, task_date, sort_order`,
+       RETURNING ${TASK_COLUMNS}`,
       [req.userId, date]
     );
     res.json(result.rows.map(taskJson));

@@ -41,6 +41,10 @@ ALTER TABLE flows ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAU
 
 ALTER TABLE flows ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('high', 'medium', 'low'));
 
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS flow_occurrences (
   flow_id UUID NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
   task_date DATE NOT NULL,
@@ -73,6 +77,7 @@ async function migrate(pool) {
 }
 
 function taskJson(row) {
+  const startedAt = row.started_at ? new Date(row.started_at).toISOString() : null;
   return {
     id: row.id,
     title: row.title,
@@ -81,7 +86,9 @@ function taskJson(row) {
     time: row.time_label,
     completed: row.completed,
     taskDate: row.task_date,
-    sortOrder: row.sort_order
+    sortOrder: row.sort_order,
+    durationMinutes: row.duration_minutes,
+    startedAt
   };
 }
 

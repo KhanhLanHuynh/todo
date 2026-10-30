@@ -29,6 +29,8 @@ let undoFn = null;
 let toastTimer = null;
 let cancelRename = false;
 let returnToMaster = false;
+let durationTimer = null;
+const timerPending = new Set();
 
 const $ = (id) => document.getElementById(id);
 
@@ -77,6 +79,7 @@ async function api(path, options = {}) {
 
 function showAuth() {
   state.user = null;
+  clearDurationTimer();
   $("app-shell").hidden = true;
   $("auth-screen").hidden = false;
   renderAuth();
@@ -257,6 +260,48 @@ function visibleTasks() {
   }).sort((a, b) => compareByPriorityThenTime(a, b, (task) => task.time));
 }
 
+function elapsedMinutes(task, now = Date.now()) {
+  const stored = Number(task.durationMinutes);
+  let minutes = Number.isFinite(stored) && stored > 0 ? Math.floor(stored) : 0;
+  if (task.startedAt) {
+    const started = new Date(task.startedAt).getTime();
+    if (!Number.isNaN(started)) minutes += Math.max(0, Math.floor((now - started) / 60000));
+  }
+  return minutes;
+}
+
+function formatDuration(minutes) {
+  const total = Math.max(0, Math.floor(minutes));
+  const hours = Math.floor(total / 60);
+  const mins = total % 60;
+  if (hours === 0) return `${mins} min`;
+  if (mins === 0) return `${hours}h`;
+  return `${hours}h ${mins}m`;
+}
+
+function clearDurationTimer() {
+  if (!durationTimer) return;
+  clearInterval(durationTimer);
+  durationTimer = null;
+}
+
+function syncDurationTimer() {
+  const running = state.tasks.some((task) => task.startedAt);
+  if (running && !durationTimer) durationTimer = setInterval(paintDurations, 1000);
+  if (!running) clearDurationTimer();
+}
+
+function paintDurations() {
+  const now = Date.now();
+  for (const task of state.tasks) {
+    if (!task.startedAt) continue;
+    const el = document.querySelector(`.duration[data-duration="${CSS.escape(task.id)}"]`);
+    if (!el) continue;
+    const text = formatDuration(elapsedMinutes(task, now));
+    if (el.textContent !== text) el.textContent = text;
+  }
+}
+
 function progressCopy(done) {
   if (done === 0) return "You've cleared 0 objectives so far.";
   if (done === 1) return "You've cleared 1 objective so far.";
@@ -316,6 +361,7 @@ function renderTasks() {
   if (!tasks.length) {
     const hint = state.tasks.length ? "No tasks match this view." : "No tasks on this day yet. Add the first goal below.";
     list.innerHTML = `<li class="empty">${hint}</li>`;
+    syncDurationTimer();
     return;
   }
 
@@ -323,6 +369,11 @@ function renderTasks() {
     const title = state.renamingId === task.id
       ? `<input class="rename-input" value="${escapeHtml(task.title)}" aria-label="Rename task">`
       : `<span class="task-title${task.completed ? " done" : ""}">${escapeHtml(task.title)}</span>`;
+    const minutes = elapsedMinutes(task);
+    const duration = task.startedAt || minutes > 0
+      ? `<span class="duration" data-duration="${escapeHtml(task.id)}">${escapeHtml(formatDuration(minutes))}</span>`
+      : "";
+    const running = Boolean(task.startedAt);
     return `
       <li class="task${task.completed ? " done" : ""}" data-id="${escapeHtml(task.id)}">
         <button type="button" class="check" aria-pressed="${task.completed}" aria-label="${task.completed ? "Mark remaining" : "Mark complete"}">${task.completed ? ICONS.check : ""}</button>
@@ -334,8 +385,10 @@ function renderTasks() {
           <div class="task-meta">
             <span class="cat"><i class="dot-cat ${escapeHtml(task.category.toLowerCase())}"></i>${escapeHtml(task.category)}</span>
             <span class="time">${ICONS.clock} ${escapeHtml(task.time)}</span>
+            ${duration}
           </div>
         </div>
+        <button type="button" class="timer-btn${running ? " running" : ""}" data-timer="${running ? "stop" : "start"}" aria-pressed="${running}" aria-label="${running ? "Stop timer" : "Start timer"}">${running ? "Stop" : "Start"}</button>
         <button type="button" class="more" aria-label="Task actions" aria-expanded="${state.menuTaskId === task.id}">${ICONS.dots}</button>
         ${taskMenu(task)}
       </li>
@@ -349,6 +402,7 @@ function renderTasks() {
       input.select();
     }
   }
+  syncDurationTimer();
 }
 
 function renderFlows() {
@@ -447,6 +501,26 @@ async function patchTask(id, patch) {
   }
 }
 
+async function toggleTimer(id, action) {
+  if (timerPending.has(id)) return;
+  const task = state.tasks.find((item) => item.id === id);
+  if (!task) return;
+  if ((action === "start" && task.startedAt) || (action === "stop" && !task.startedAt)) return;
+  timerPending.add(id);
+  try {
+    const result = await api(`/api/tasks/${id}/timer`, { method: "POST", body: { action } });
+    for (const saved of result.tasks || []) {
+      const current = state.tasks.find((item) => item.id === saved.id);
+      if (current) Object.assign(current, saved);
+    }
+    renderTasks();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    timerPending.delete(id);
+  }
+}
+
 function toggleTask(id) {
   const task = state.tasks.find((item) => item.id === id);
   if (!task) return;
@@ -479,7 +553,8 @@ async function deleteTask(id) {
           time: removed.time,
           completed: removed.completed,
           taskDate: removed.taskDate,
-          sortOrder: removed.sortOrder
+          sortOrder: removed.sortOrder,
+          durationMinutes: Math.max(0, Math.floor(Number(removed.durationMinutes) || 0))
         }
       });
       if (restored.taskDate === state.selectedDate) {
@@ -903,6 +978,12 @@ function bind() {
       closePopovers();
       renderTasks();
       if (state.menuTaskId) positionMenu(id);
+      return;
+    }
+    const timer = event.target.closest("[data-timer]");
+    if (timer) {
+      event.stopPropagation();
+      toggleTimer(id, timer.dataset.timer);
       return;
     }
     const action = event.target.closest("[data-action]");
