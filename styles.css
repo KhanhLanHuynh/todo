@@ -505,6 +505,7 @@ h1 {
 
 .timer-btn {
   height: 32px;
+  min-width: 72px;
   padding: 0 12px;
   border: 1px solid #22c55e;
   border-radius: 999px;
@@ -515,6 +516,8 @@ h1 {
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
+
+.timer-spacer { visibility: hidden; }
 
 .timer-btn:hover { background: #f0fdf4; }
 

@@ -374,6 +374,9 @@ function renderTasks() {
       ? `<span class="duration" data-duration="${escapeHtml(task.id)}">${escapeHtml(formatDuration(minutes))}</span>`
       : "";
     const running = Boolean(task.startedAt);
+    const timerControl = task.completed && !running
+      ? `<span class="timer-btn timer-spacer" aria-hidden="true"></span>`
+      : `<button type="button" class="timer-btn${running ? " running" : ""}" data-timer="${running ? "stop" : "start"}" aria-pressed="${running}" aria-label="${running ? "Stop timer" : "Start timer"}">${running ? "Stop" : "Start"}</button>`;
     return `
       <li class="task${task.completed ? " done" : ""}" data-id="${escapeHtml(task.id)}">
         <button type="button" class="check" aria-pressed="${task.completed}" aria-label="${task.completed ? "Mark remaining" : "Mark complete"}">${task.completed ? ICONS.check : ""}</button>
@@ -388,7 +391,7 @@ function renderTasks() {
             ${duration}
           </div>
         </div>
-        <button type="button" class="timer-btn${running ? " running" : ""}" data-timer="${running ? "stop" : "start"}" aria-pressed="${running}" aria-label="${running ? "Stop timer" : "Start timer"}">${running ? "Stop" : "Start"}</button>
+        ${timerControl}
         <button type="button" class="more" aria-label="Task actions" aria-expanded="${state.menuTaskId === task.id}">${ICONS.dots}</button>
         ${taskMenu(task)}
       </li>
