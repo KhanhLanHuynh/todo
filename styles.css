@@ -623,11 +623,20 @@ h1 {
 
 .add-row {
   display: flex;
+  flex-direction: column;
   gap: 12px;
   margin-top: 14px;
 }
 
-.add-field { position: relative; flex: 1; }
+.add-main,
+.add-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.add-actions { justify-content: flex-end; }
+
+.add-field { position: relative; flex: 1; min-width: 0; }
 
 .add-field .plus {
   position: absolute;
@@ -1159,7 +1168,8 @@ body.modal-open { overflow: hidden; }
   .top-actions { width: 100%; }
   .search { flex: 1; width: auto; }
   h1 { font-size: 28px; }
-  .add-row { flex-direction: column; }
+  .add-main,
+  .add-actions { flex-direction: column; }
   .add-row select,
   .add-row input[type="time"] { width: 100%; }
   .btn-primary,

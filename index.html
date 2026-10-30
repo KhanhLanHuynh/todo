@@ -159,18 +159,22 @@
         <ul id="task-list" class="card task-card" aria-label="Tasks"></ul>
 
         <form id="add-form" class="add-row">
-          <div class="add-field">
-            <span class="plus" aria-hidden="true">+</span>
-            <input id="new-task" type="text" maxlength="120" placeholder="Press Enter to add a new task..." autocomplete="off">
+          <div class="add-main">
+            <div class="add-field">
+              <span class="plus" aria-hidden="true">+</span>
+              <input id="new-task" type="text" maxlength="120" placeholder="Press Enter to add a new task..." autocomplete="off">
+            </div>
+            <select id="new-priority" aria-label="Priority">
+              <option value="high">High</option>
+              <option value="medium" selected>Medium</option>
+              <option value="low">Low</option>
+            </select>
+            <input id="new-time" type="time" aria-label="Time" required>
           </div>
-          <select id="new-priority" aria-label="Priority">
-            <option value="high">High</option>
-            <option value="medium" selected>Medium</option>
-            <option value="low">Low</option>
-          </select>
-          <input id="new-time" type="time" aria-label="Time" required>
-          <button type="submit" class="btn-primary">Add goal</button>
-          <button type="button" id="copy-yesterday" class="btn-secondary">Copy yesterday</button>
+          <div class="add-actions">
+            <button type="submit" class="btn-primary">Add goal</button>
+            <button type="button" id="copy-yesterday" class="btn-secondary">Copy yesterday</button>
+          </div>
         </form>
       </section>
 
